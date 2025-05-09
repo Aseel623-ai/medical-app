@@ -14,7 +14,8 @@ import google.generativeai as genai
 import pytesseract
 import tensorflow as tf
 import torch
-
+from transformers import pipeline
+import gdown
 
 
 
@@ -269,20 +270,75 @@ def show_service_page(service_name):
 
 
 def chest_xray_page():
+    @st.cache_resource
+    def load_model():
+        url = f"https://drive.google.com/file/d/1v90JJcPsad13gtxMluqCRau5HBmonjUH/view?usp=drive_link"
+
+        # مسارات الملفات المطلوبة
+        files = {
+            "config.json": r"https://drive.google.com/file/d/14M2rmv00uGCT7xbq7nHu7jkUaSsTQ5OG/view?usp=sharing",
+            "model.safetensors": url,  # الملف الرئيسي
+            "preprocessor_config.json": r"https://drive.google.com/file/d/1v90JJcPsad13gtxMluqCRau5HBmonjUH/view?usp=drive_link"
+        }
+
+        try:
+            # تحميل جميع الملفات
+            for file_name, file_url in files.items():
+                if not os.path.exists(file_name):
+                    gdown.download(file_url, file_name, quiet=False)
+
+            # تحميل النموذج
+            return pipeline(
+                "image-classification",
+                model="./",  # المسار الحالي
+                device="cpu"
+            )
+        except Exception as e:
+            st.error(f"خطأ في تحميل النموذج: {str(e)}")
+            return None
+
+    model = load_model()
+
     st.write("### Upload Chest X-ray")
     uploaded_file = st.file_uploader("Choose an X-ray image...", type=["jpg", "png", "jpeg"])
     if uploaded_file is not None:
         img = Image.open(uploaded_file)
         st.image(img, caption="Uploaded X-ray", use_container_width=True)
+        pipe = pipeline("image-classification", model=model)
+        pred = pipe(img)
         if st.button("Analyze X-ray"):
             with st.spinner('Analyzing...'):
-                import time
-                time.sleep(2)
                 st.success("Analysis complete!")
-                st.write("*Findings:* No abnormalities detected")
+                st.markdown(f" Diagnosis: {pred[0]['label']}")
 
 
 def brain_tumor_page():
+    @st.cache_resource  # تخزين النموذج في الذاكرة للجلسات المتعددة
+    def load_model():
+        # رابط Google Drive المعدل (استبدل ?usp=sharing بـ &export=download)
+        url = "https://drive.google.com/file/d/18z_bPv6nS3vyXsaDGdecATb_PfbUb4ih/view?usp=sharing"
+        output = "brain_classification_model.h5"
+
+        # حذف الملف القديم إذا كان موجوداً
+        if os.path.exists(output):
+            os.remove(output)
+
+        # تحميل الملف
+        gdown.download(url, output, quiet=False)
+
+        # التحقق من وجود الملف قبل التحميل
+        if not os.path.exists(output):
+            st.error("فشل تحميل ملف النموذج!")
+            return None
+
+        try:
+            return tf.keras.models.load_model(output)
+        except Exception as e:
+            st.error(f"خطأ في تحميل النموذج: {str(e)}")
+            return None
+
+    model = load_model()
+
     st.write("### Upload Brain MRI")
     uploaded_file = st.file_uploader("Choose an MRI image...", type=["jpg", "png", "jpeg"])
     if uploaded_file is not None:
@@ -296,10 +352,8 @@ def brain_tumor_page():
         img_array = np.expand_dims(np.array(img) / 255.0, axis=0)
         if st.button("Detect Tumors"):
             with st.spinner('Processing...'):
-                brain_model = tf.keras.models.load_model(r"D:\project\project\brain_classification_model.h5")
                 brain_classes = ['No_Tumor', 'Tumor']
-
-                prediction = brain_model.predict(img_array)
+                prediction = model.predict(img_array)
                 predicted_class = int(prediction[0][0] > 0.5) if prediction.shape[1] == 1 else np.argmax(prediction)
                 st.markdown(f" Diagnosis: {brain_classes[predicted_class]}")
                 st.image(result_img, caption="Detection Result", use_container_width=True)
@@ -307,7 +361,8 @@ def brain_tumor_page():
 
 def liver_page():
     st.write("### Upload liver Scan")
-    uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "png", "jpeg"])
+    view_mode = st.radio("Choose display type:", ["Classification Only", "Detection Only"])
+    uploaded_file = st.file_uploader("Upload a radiology image", type=["jpg", "jpeg", "png"])
     if uploaded_file is not None:
         liver_detection_model = torch.hub.load('ultralytics/yolov5', 'custom', path= r"D:\project\project\liver_detection_model.pt", force_reload=True)
         image = Image.open(uploaded_file).convert('RGB')
@@ -321,11 +376,12 @@ def liver_page():
             with st.spinner('Examining...'):
                 liver_model = tf.keras.models.load_model(r"D:\project\project\liver_classification_model.h5")
                 liver_classes = ['No_Fibrosis', 'Fibrosis']
-
-                prediction = liver_model.predict(img_array)
-                predicted_class = int(prediction[0][0] > 0.5) if prediction.shape[1] == 1 else np.argmax(prediction)
-                st.markdown(f" Diagnosis: {liver_classes[predicted_class]}")
-                st.image(result_img, caption="Detection Result", use_container_width=True)
+                if view_mode == "Classification Only":
+                    prediction = liver_model.predict(img_array)
+                    predicted_class = int(prediction[0][0] > 0.5) if prediction.shape[1] == 1 else np.argmax(prediction)
+                    st.markdown(f" Diagnosis: {liver_classes[predicted_class]}")
+                if view_mode == "Detection Only":
+                    st.image(result_img, caption="Detection Result", use_container_width=True)
 
 
 def analysis_page():
@@ -336,7 +392,7 @@ def analysis_page():
 
     model = load_model()
 
-    pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+    pytesseract.pytesseract.tesseract_cmd = r'/usr/bin/tesseract'
 
     st.header("تحميل صورة التحليل")
     uploaded_file = st.file_uploader("قم بتحميل صورة التحليل الطبي", type=["jpg", "jpeg", "png"])
@@ -403,6 +459,31 @@ def analysis_page():
     """)
 
 def eye_scan_page():
+    @st.cache_resource  # تخزين النموذج في الذاكرة للجلسات المتعددة
+    def load_model():
+        # رابط Google Drive المعدل (استبدل ?usp=sharing بـ &export=download)
+        url = "https://drive.google.com/uc?id=1sACluiNwV__kosazzRVN-42vnHijYUBK&export=download"
+        output = "cnn_model.h5"
+
+        # حذف الملف القديم إذا كان موجوداً
+        if os.path.exists(output):
+            os.remove(output)
+
+        # تحميل الملف
+        gdown.download(url, output, quiet=False)
+
+        # التحقق من وجود الملف قبل التحميل
+        if not os.path.exists(output):
+            st.error("فشل تحميل ملف النموذج!")
+            return None
+
+        try:
+            return tf.keras.models.load_model(output)
+        except Exception as e:
+            st.error(f"خطأ في تحميل النموذج: {str(e)}")
+            return None
+
+    model = load_model()
     st.write("قم بتحميل صورة OCT للكشف عن أمراض العين")
 
     st.sidebar.header("معلومات عن المرض")
@@ -438,18 +519,7 @@ def eye_scan_page():
     selected_disease = st.sidebar.selectbox("اختر المرض لمعرفة المزيد", list(disease_info.keys()))
     st.sidebar.markdown(disease_info[selected_disease])
 
-    # دالة لتحميل النموذج
-    @st.cache_resource
-    def load_classification_model():
-        try:
-            model_path = os.path.join(os.path.dirname(__file__), r"C:\Users\PC_STORE\Downloads\cnn_model.h5")
-            model = load_model(model_path)
-            return model
-        except Exception as e:
-            st.error(f"خطأ في تحميل النموذج: {e}")
-            return None
 
-    model = load_classification_model()
     classes = ['CNV', 'DME', 'DRUSEN', 'NORMAL']
 
     def predict_image(img):
@@ -500,6 +570,7 @@ def eye_scan_page():
     - دقة التشخيص تعتمد على جودة الصورة المدخلة
     - يجب التأكد من أن الصورة المحملة هي صورة OCT حقيقية
     """)
+
 
 
 
